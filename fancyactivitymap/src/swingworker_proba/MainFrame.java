@@ -30,10 +30,15 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutionException;
@@ -56,6 +61,11 @@ import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
+import javax.swing.filechooser.FileNameExtensionFilter;
+import org.apache.poi.xssf.usermodel.XSSFCell;
+import org.apache.poi.xssf.usermodel.XSSFRow;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.jdesktop.swingx.JXTreeTable;
 import org.jxmapviewer.JXMapKit;
 import org.jxmapviewer.JXMapViewer;
@@ -102,7 +112,9 @@ public class MainFrame extends JFrame{
         JMenuBar menu=new JMenuBar();
         JMenu fileMenu=new JMenu("File");
         JMenuItem loadMenuItem=new JMenuItem("Load Tracks");
+        JMenuItem excelMenuItem=new JMenuItem("Excel");
         fileMenu.add(loadMenuItem);
+        fileMenu.add(excelMenuItem);
         menu.add(fileMenu);
         add(menu,BorderLayout.NORTH);
         
@@ -222,6 +234,123 @@ public class MainFrame extends JFrame{
                         
                         setVisible(true);
                     }
+                }
+            }
+        });
+        
+        excelMenuItem.addActionListener(new ActionListener() {
+
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                try {
+                    InputStream excelFile=new FileInputStream("30km_egyeni.xlsx");
+                    XSSFWorkbook wb=new XSSFWorkbook(excelFile);
+                    XSSFSheet sheet=wb.getSheetAt(0);
+                    Iterator rows=sheet.rowIterator();
+                    boolean headerRow=true;
+                    List<long[]> rowList=new ArrayList<long[]>();
+                    byte fps=20;
+                    float videoLengthInMinutes=2;
+                    long startTime=Long.MAX_VALUE;
+                    long endTime=0;
+                    while(rows.hasNext())
+                    {
+                        if(headerRow)
+                        {
+                            headerRow=false;
+                            rows.next();
+                        }
+                        else
+                        {
+                            XSSFRow row=(XSSFRow)rows.next();
+                            Iterator cells=row.cellIterator();
+                            byte cellCount=0;
+                            long[] startAndEndTime=new long[2];
+                            while(cells.hasNext())
+                            {
+                                if(cellCount==6)
+                                {
+                                    XSSFCell cell=(XSSFCell)cells.next();
+                                    if(!cell.toString().isEmpty())
+                                    {
+                                        startAndEndTime[0]=LocalTime.parse(cell.toString()).atDate(LocalDate.now()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+                                    }
+                                }
+                                if((cellCount==10) && (startAndEndTime[0]>0L))
+                                {
+                                    XSSFCell cell=(XSSFCell)cells.next();
+                                    if(!cell.toString().isEmpty())
+                                    {
+                                        startAndEndTime[1]=LocalTime.parse(cell.toString()).atDate(LocalDate.now()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+                                        rowList.add(startAndEndTime);
+                                        if(startTime>startAndEndTime[0])
+                                        {
+                                            startTime=startAndEndTime[0];
+                                        }
+                                        if(endTime<startAndEndTime[1])
+                                        {
+                                            endTime=startAndEndTime[1];
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    cells.next();
+                                }
+                                cellCount+=1;
+                            }
+                        }
+                    }
+                    wb.close();
+                    excelFile.close();
+                    long videoLengthInMiliSeconds=(long)(videoLengthInMinutes*60*1000);
+                    long timeInMillisecond=(endTime-startTime)/(fps*(videoLengthInMiliSeconds/1000));
+                    
+                    JFileChooser fileChooser=new JFileChooser(new File("."));
+                    fileChooser.setAcceptAllFileFilterUsed(false);
+                    FileNameExtensionFilter gpxFilter=new FileNameExtensionFilter("Gpx files", "gpx");
+                    fileChooser.addChoosableFileFilter(gpxFilter);
+                    if(fileChooser.showOpenDialog(null)==JFileChooser.APPROVE_OPTION)
+                    {
+                        String gpxFile=fileChooser.getSelectedFile().getPath();
+                        GPXParser gpxParser=new GPXParser();
+                        FileInputStream gpxInput=new FileInputStream(gpxFile);
+                        GPX gpx=gpxParser.parseGPX(gpxInput);
+                        ArrayList<double[]> geoPoints=new ArrayList<>();
+                        for(Track track:gpx.getTracks())
+                        {
+                            for(TrackSegment tSegment:track.getTrackSegments())
+                            {
+                                for(Waypoint wp:tSegment.getWaypoints())
+                                {
+                                    double[] latLong=new double[2];
+                                    latLong[0]=wp.getLatitude();
+                                    latLong[1]=wp.getLongitude();
+                                    geoPoints.add(latLong);
+                                }
+                            }
+                        }
+                        for(double[] geoPoint:geoPoints)
+                        {
+                            System.out.println("lat: "+geoPoint[0]+" long: "+geoPoint[1]);
+                        }
+                        System.out.println(geoPoints.size());
+                        System.out.println(startTime+" , "+endTime);
+                        float timeDiff=(endTime-startTime)/geoPoints.size();
+                        long total=startTime;
+                        for(int i=0;i<geoPoints.size();i++)
+                        {
+                            System.out.println("lat: "+geoPoints.get(i)[0]+" long: "+geoPoints.get(i)[1]+" timestamp: "+new Date(total));
+                            total+=(long)timeDiff;
+                        }
+                        System.out.println("start: "+new Date(startTime)+" end: "+new Date(endTime));
+                    }
+                } catch (FileNotFoundException ex) {
+                    Logger.getLogger(MainFrame.class.getName()).log(Level.SEVERE, null, ex);
+                } catch (IOException ex) {
+                    Logger.getLogger(MainFrame.class.getName()).log(Level.SEVERE, null, ex);
+                } catch (Exception ex) {
+                    Logger.getLogger(MainFrame.class.getName()).log(Level.SEVERE, null, ex);
                 }
             }
         });
